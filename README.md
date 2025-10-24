@@ -1,138 +1,155 @@
 # Image Inpainting GAN
 
-A PyTorch-based image inpainting project using Generative Adversarial Networks (GANs). This repository provides code to train, evaluate, and run inference with an image inpainting model (generator + discriminator) for filling missing regions in images.
+This repository contains an image inpainting project implemented in PyTorch. The main training and experimentation script is `gan_code.py`, which implements a context-aware generator and a multi-scale discriminator, advanced loss terms (perceptual, adversarial with gradient penalty, feature-matching, and contrastive), a curriculum-based mask generator, AMP training, and uncertainty estimation by Monte‑Carlo sampling.
 
-## Features
-- Trainable GAN for image inpainting
-- Support for common loss terms (adversarial, reconstruction L1/L2, perceptual, style, TV)
-- Checkpoint saving and resume training
-- Inference script to inpaint arbitrary images given a mask
-- Example training and evaluation commands
 
-## Repository structure 
-- data/               -- dataset download/preparation scripts
-- datasets/           -- dataset wrappers / PyTorch Dataset classes
-- models/             -- generator and discriminator model definitions
-- losses/             -- loss functions (e.g., perceptual, adversarial)
-- train.py            -- training loop
-- eval.py             -- evaluation script
-- inference.py        -- run inpainting on single images / folders
-- utils/              -- helper functions (logging, checkpoints, image IO)
-- checkpoints/        -- saved models
-- results/            -- generated images during training/eval
-- notebooks/          -- demo notebooks (optional)
-- requirements.txt    -- Python dependencies
-- README.md           -- this file
+---
 
-## Installation
+## Highlights (from gan_code.py)
+- Generator: ContextAwareGenerator (encoder → bottleneck with self-attention & residuals → contextual-attention layer → decoder).
+- Discriminator: MultiScaleDiscriminator (spectral-norm convs, multi-stage features, final scalar output).
+- Masking: CurriculumMaskGenerator — progressively increases mask difficulty across epochs.
+- Losses:
+  - Reconstruction (L1) on masked regions
+  - Perceptual loss using VGG19 features
+  - Adversarial loss with dynamic adversarial weight (ramp-up)
+  - Gradient penalty for stable GAN training
+  - Feature matching (L1 between discriminator features)
+  - Optional contrastive-style perceptual loss (applied periodically)
+- Training details:
+  - Mixed precision training (torch.amp + GradScaler)
+  - AdamW optimizers for G and D
+  - Warmup + Cosine LR schedulers (LinearLR → CosineAnnealingLR via SequentialLR)
+  - Gradient clipping
+  - Checkpointing & sample visualizations saved to `checkpoints/` and `samples/`
+  - Uncertainty estimation via multiple forward passes
 
-1. Clone the repo
-   ```bash
-   git clone https://github.com/Dakshesh-007/image-_inpainting_gan.git
-   cd image-_inpainting_gan
-   ```
+---
 
-2. Create a virtual environment and install dependencies
-   ```bash
-   python -m venv venv
-   source venv/bin/activate   # on Windows use `venv\Scripts\activate`
-   pip install -r requirements.txt
-   ```
+## Requirements
+Minimum packages used in the script:
+- Python 3.8+
+- torch (CUDA-enabled)
+- torchvision
+- numpy
+- pillow (PIL)
+- matplotlib
+- tqdm
 
-3. (Optional) Install additional packages such as torch, torchvision if not in requirements:
-   ```bash
-   pip install torch torchvision
-   ```
+Note: The code asserts that CUDA is available:
+```python
+assert torch.cuda.is_available(), "CUDA-enabled GPU required!"
+```
+So a CUDA GPU is required to run the script as-is. For CPU-only execution, the script would need modification.
 
-## Quick start
-
-Prepare dataset (example: CelebA, Places2, or your own).
-- Place images in a folder structure expected by the dataset wrapper (see datasets/).
-- If masks are required, the project may generate random masks on-the-fly or accept a masks/ folder.
-
-Train (example)
+Suggested quick install:
 ```bash
-python train.py \
-  --data_root ./data/celeba \
-  --batch_size 16 \
-  --num_epochs 100 \
-  --checkpoint_dir ./checkpoints \
-  --lr 1e-4 \
-  --mask_strategy random
+python -m venv venv
+source venv/bin/activate
+pip install torch torchvision numpy pillow matplotlib tqdm
 ```
 
-Resume training from a checkpoint
+---
+
+## Repo layout (as used by `gan_code.py`)
+- gan_code.py             -- main training script (contains model, losses, and training loop)
+- checkpoints/            -- saved model checkpoints (created during training)
+- samples/                -- visualization outputs (created during training)
+- data/ or your dataset path (user-specified) -- images used for training/eval
+
+---
+
+## Configuration (Config class in gan_code.py)
+Important parameters you may tune:
+- img_size: 256
+- batch_size: 16
+- epochs: 60
+- num_images: 1600 (limits dataset images used)
+- checkpoint_freq: 5
+- warmup_epochs: 10
+- curriculum_steps: 30
+- grad_clip: 0.5
+- g_lr / d_lr: 2e-4 / 1e-4
+- lambda_rec, lambda_con, lambda_fm, gp_weight, lambda_adv_start, lambda_adv_end
+- adv_rampup_epochs: number of epochs for adversarial weight ramp-up
+
+To change config values edit the `Config` class in `gan_code.py`.
+
+---
+
+## Dataset format & recommended preparation
+- The dataset used by the script is a directory of images (JPEG/PNG). The dataset wrapper loads up to `Config.num_images` images.
+- Default preprocessing: resize to img_size + 32, random crop to img_size, random flips, color jitter, normalization to [-1, 1].
+- Default dataset path in the script (for Colab) is:
+  `/content/drive/MyDrive/Colab Notebooks/dataset/val_256`
+- Place images directly in the directory (flat structure). Corrupt files will be skipped.
+
+---
+
+## How to run
+1. Edit `gan_code.py` to set your `data_root` path (or modify the script to accept a CLI argument).
+   - By default:
+     data_root = '/content/drive/MyDrive/Colab Notebooks/dataset/val_256'
+2. Run the script:
 ```bash
-python train.py --resume ./checkpoints/last_checkpoint.pth
+python gan_code.py
 ```
+Notes:
+- The script will create `checkpoints/` and `samples/` directories if they don't exist.
+- Checkpoints saved: `checkpoints/epoch_{epoch}.pth` and `checkpoints/best_model.pth`.
+- Sample visualizations are saved as `samples/epoch_XXXX.png`.
 
-Evaluate
-```bash
-python eval.py \
-  --checkpoint ./checkpoints/best.pth \
-  --data_root ./data/val \
-  --output_dir ./results/eval
-```
+Recommended for Google Colab:
+- Mount Google Drive, set `data_root` to a path in your drive (as in the default).
+- Use a GPU runtime and install the required packages.
 
-Run inference on a single image
-```bash
-python inference.py \
-  --checkpoint ./checkpoints/best.pth \
-  --image ./examples/input.jpg \
-  --mask ./examples/mask.png \
-  --output ./results/inpainted.png
-```
+---
 
-If the repository's scripts use different flags, replace the above with the exact CLI options from your code (I can generate exact commands after inspecting train.py / inference.py).
+## Checkpoints & Outputs
+- Checkpoints include model and optimizer states allowing resuming training.
+- Visual outputs include a 5-panel image (masked input, prediction, ground truth, error map, uncertainty map).
+- Uncertainty estimation: multiple inferences per sample (`num_uncertainty_passes`) and visualize standard deviation.
 
-## Model & Training Details (general)
-Generator:
-- Typically a U-Net / encoder-decoder with skip connections, or a gated convolutional generator for better hole filling.
-Discriminator:
-- PatchGAN or multi-scale discriminator that focuses on local realism.
-Losses:
-- Adversarial loss (GAN)
-- Reconstruction loss (L1 or L2) on missing regions
-- Perceptual loss (VGG feature space) to improve perceptual quality
-- Style loss and Total Variation (TV) loss may be used to enhance texture consistency
+---
 
-Training tips:
-- Use learning rate scheduling and gradient clipping if training becomes unstable.
-- Start with higher weight on reconstruction loss and slowly increase adversarial loss weight.
-- Use mixed precision (AMP) to save memory and speed up training if supported.
+## Model architecture (brief)
+- ResidualBlock: conv downsampling + group norm + GELU + residual shortcut
+- SelfAttentionBlock: GroupNorm → MultiheadAttention applied to flattened spatial features
+- ContextualAttentionLayer: convolutional matching and attention across spatial features (custom contextual match)
+- ContextAwareGenerator: concatenates input RGB and mask channels (4 channels) and outputs a 3-channel inpainted image in [-1,1]
+- MultiScaleDiscriminator: several spectral-norm conv downsampling stages producing patch-level features and a single scalar output
 
-## Checkpoints & Logging
-- Checkpoints should save both model weights and optimizer/scheduler state for resuming training.
-- Log training metrics (losses, PSNR, SSIM) and sample images periodically to track progress.
-- Optionally integrate TensorBoard or Weights & Biases for visual tracking.
+---
 
-## Dataset notes
-- Common choices for inpainting: CelebA-HQ, Places2, Paris StreetView, ImageNet subsets.
-- The repository may support random rectangular masks, irregular masks, or user-supplied masks.
-- Ensure images are resized / normalized consistently with the network's expected input.
+## Losses & training tricks
+- Perceptual loss uses early VGG19 features (vgg.features[:16]) and is frozen.
+- Gradient penalty is used (WGAN-GP style) for discriminator regularization.
+- Feature-matching loss reduces artifacts by matching intermediate discriminator activations.
+- Adversarial weight is ramped from `lambda_adv_start` to `lambda_adv_end` over `adv_rampup_epochs`.
+- Contrastive-style VGG-based loss is applied at a configurable frequency (`contrastive_loss_frequency`).
+- Mixed precision and gradient clipping are used for stability and speed.
 
-## Example results
-- Include before/after examples in results/ showing masked input, ground truth, and inpainted output.
-- Report quantitative metrics like PSNR and SSIM on a held-out validation set.
+---
 
-## Common commands (adapt to actual scripts)
-- Preview generated images during training (save to results/iteration_xxx.png)
-- Convert checkpoints to CPU-only for sharing:
-  ```python
-  import torch
-  ckpt = torch.load('checkpoint.pth', map_location='cpu')
-  torch.save(ckpt, 'checkpoint_cpu.pth')
-  ```
+## Tips & Troubleshooting
+- If you hit OOM:
+  - Reduce `Config.batch_size`.
+  - Reduce `img_size`.
+  - Reduce number of workers or disable persistent_workers.
+- If CUDA assertion fails, make sure CUDA drivers and the correct PyTorch/CUDA wheel are installed.
+- If you see NaN/Inf values, inspect images for corrupt files, or reduce learning rates.
+- The dataset loader caches items — if you modify transforms and want fresh samples, restart the script.
+- For CPU-only debugging, remove or comment the CUDA assert and replace device handling appropriately.
+
+---
 
 ## Contributing
-- Open an issue describing the feature or bug.
-- Fork the repository, create a feature branch, and open a pull request.
-- Add tests or example notebooks to demonstrate new features.
+- Open an issue to describe bugs, feature requests, or desired improvements.
+- Fork -> create a feature branch -> open a PR. Include tests or examples for large changes.
 
-## License
-- Add your chosen license (MIT, Apache-2.0, etc.) in a LICENSE file. If not present, please add one and indicate the license here.
+---
 
-## Citation
-If you use this project in your research, please cite the repository and the underlying paper(s) for the inpainting model you used (e.g., "Generative Image Inpainting with Contextual Attention" or more recent gated-conv / partial conv inpainting papers) — replace with the actual paper name used by the implementation.
+## License & Citation
+- No LICENSE file is included by default in the repository. Add a license file (e.g., MIT or Apache-2.0) at the repo root to make usage terms explicit.
 
 ---
