@@ -147,9 +147,5 @@ Recommended for Google Colab:
 - Open an issue to describe bugs, feature requests, or desired improvements.
 - Fork -> create a feature branch -> open a PR. Include tests or examples for large changes.
 
----
-
-## License & Citation
-- No LICENSE file is included by default in the repository. Add a license file (e.g., MIT or Apache-2.0) at the repo root to make usage terms explicit.
 
 ---
